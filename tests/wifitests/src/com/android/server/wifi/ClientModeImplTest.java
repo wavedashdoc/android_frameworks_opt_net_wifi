@@ -1866,15 +1866,15 @@ public class ClientModeImplTest {
     @Test
     public void syncRemovePasspointConfig() throws Exception {
         String fqdn = "test.com";
-        when(mPasspointManager.removeProvider(fqdn)).thenReturn(true);
+        when(mPasspointManager.removeProvider(anyInt(), anyBoolean(), eq(fqdn))).thenReturn(true);
         mLooper.startAutoDispatch();
-        assertTrue(mCmi.syncRemovePasspointConfig(mCmiAsyncChannel, fqdn));
+        assertTrue(mCmi.syncRemovePasspointConfig(mCmiAsyncChannel, true, fqdn));
         mLooper.stopAutoDispatch();
         reset(mPasspointManager);
 
-        when(mPasspointManager.removeProvider(fqdn)).thenReturn(false);
+        when(mPasspointManager.removeProvider(anyInt(), anyBoolean(), eq(fqdn))).thenReturn(false);
         mLooper.startAutoDispatch();
-        assertFalse(mCmi.syncRemovePasspointConfig(mCmiAsyncChannel, fqdn));
+        assertFalse(mCmi.syncRemovePasspointConfig(mCmiAsyncChannel, true, fqdn));
         mLooper.stopAutoDispatch();
     }
 
@@ -1902,16 +1902,17 @@ public class ClientModeImplTest {
         config.setHomeSp(homeSp);
         expectedConfigs.add(config);
 
-        when(mPasspointManager.getProviderConfigs()).thenReturn(expectedConfigs);
+        when(mPasspointManager.getProviderConfigs(anyInt(), anyBoolean()))
+                .thenReturn(expectedConfigs);
         mLooper.startAutoDispatch();
-        assertEquals(expectedConfigs, mCmi.syncGetPasspointConfigs(mCmiAsyncChannel));
+        assertEquals(expectedConfigs, mCmi.syncGetPasspointConfigs(mCmiAsyncChannel, true));
         mLooper.stopAutoDispatch();
         reset(mPasspointManager);
 
-        when(mPasspointManager.getProviderConfigs())
-                .thenReturn(new ArrayList<PasspointConfiguration>());
+        when(mPasspointManager.getProviderConfigs(anyInt(), anyBoolean()))
+                .thenReturn(new ArrayList<>());
         mLooper.startAutoDispatch();
-        assertTrue(mCmi.syncGetPasspointConfigs(mCmiAsyncChannel).isEmpty());
+        assertTrue(mCmi.syncGetPasspointConfigs(mCmiAsyncChannel, true).isEmpty());
         mLooper.stopAutoDispatch();
     }
 
@@ -2748,6 +2749,21 @@ public class ClientModeImplTest {
     }
 
     /**
+     * Verify that we don't crash when WifiNative returns null as the current MAC address.
+     * @throws Exception
+     */
+    @Test
+    public void testMacRandomizationWifiNativeReturningNull() throws Exception {
+        when(mWifiNative.getMacAddress(anyString())).thenReturn(null);
+        initializeAndAddNetworkAndVerifySuccess();
+        assertEquals(ClientModeImpl.CONNECT_MODE, mCmi.getOperationalModeForTest());
+        assertEquals(WifiManager.WIFI_STATE_ENABLED, mCmi.syncGetWifiState());
+
+        connect();
+        verify(mWifiNative).setMacAddress(WIFI_IFACE_NAME, TEST_LOCAL_MAC_ADDRESS);
+    }
+
+    /**
      * Verifies that CMD_START_CONNECT make WifiDiagnostics report
      * CONNECTION_EVENT_STARTED
      * @throws Exception
@@ -3340,7 +3356,7 @@ public class ClientModeImplTest {
         when(mWifiNative.getWifiLinkLayerStats(any())).thenReturn(newLLStats);
         mCmi.sendMessage(ClientModeImpl.CMD_RSSI_POLL, 1);
         mLooper.dispatchAll();
-        verify(mWifiDataStall).checkForDataStall(oldLLStats, newLLStats);
+        verify(mWifiDataStall).checkForDataStall(oldLLStats, newLLStats, mCmi.getWifiInfo());
         verify(mWifiMetrics).incrementWifiLinkLayerUsageStats(newLLStats);
     }
 
@@ -3356,7 +3372,7 @@ public class ClientModeImplTest {
 
         WifiLinkLayerStats stats = new WifiLinkLayerStats();
         when(mWifiNative.getWifiLinkLayerStats(any())).thenReturn(stats);
-        when(mWifiDataStall.checkForDataStall(any(), any()))
+        when(mWifiDataStall.checkForDataStall(any(), any(), any()))
                 .thenReturn(WifiIsUnusableEvent.TYPE_UNKNOWN);
         mCmi.sendMessage(ClientModeImpl.CMD_RSSI_POLL, 1);
         mLooper.dispatchAll();
@@ -3364,11 +3380,16 @@ public class ClientModeImplTest {
         verify(mWifiMetrics, never()).addToWifiUsabilityStatsList(WifiUsabilityStats.LABEL_BAD,
                 eq(anyInt()), eq(-1));
 
-        when(mWifiDataStall.checkForDataStall(any(), any()))
+        when(mWifiDataStall.checkForDataStall(any(), any(), any()))
                 .thenReturn(WifiIsUnusableEvent.TYPE_DATA_STALL_BAD_TX);
+        when(mClock.getElapsedSinceBootMillis()).thenReturn(10L);
         mCmi.sendMessage(ClientModeImpl.CMD_RSSI_POLL, 1);
         mLooper.dispatchAll();
         verify(mWifiMetrics, times(2)).updateWifiUsabilityStatsEntries(any(), eq(stats));
+        when(mClock.getElapsedSinceBootMillis())
+                .thenReturn(10L + ClientModeImpl.DURATION_TO_WAIT_ADD_STATS_AFTER_DATA_STALL_MS);
+        mCmi.sendMessage(ClientModeImpl.CMD_RSSI_POLL, 1);
+        mLooper.dispatchAll();
         verify(mWifiMetrics).addToWifiUsabilityStatsList(WifiUsabilityStats.LABEL_BAD,
                 WifiIsUnusableEvent.TYPE_DATA_STALL_BAD_TX, -1);
     }
@@ -3539,14 +3560,15 @@ public class ClientModeImplTest {
     @Test
     public void testRemovePasspointConfig() throws Exception {
         String fqdn = "test.com";
-        when(mPasspointManager.removeProvider(anyString())).thenReturn(true);
+        when(mPasspointManager.removeProvider(anyInt(), anyBoolean(), anyString()))
+                .thenReturn(true);
 
         // switch to connect mode and verify wifi is reported as enabled
         startSupplicantAndDispatchMessages();
-        mCmi.sendMessage(ClientModeImpl.CMD_REMOVE_PASSPOINT_CONFIG, fqdn);
+        mCmi.sendMessage(ClientModeImpl.CMD_REMOVE_PASSPOINT_CONFIG, TEST_UID, 0, fqdn);
         mLooper.dispatchAll();
 
-        verify(mWifiConfigManager).removePasspointConfiguredNetwork(eq(fqdn));
+        verify(mWifiConfigManager).removePasspointConfiguredNetwork(fqdn);
     }
 
     /**
