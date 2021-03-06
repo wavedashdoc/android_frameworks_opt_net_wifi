@@ -17,6 +17,7 @@
 package com.android.server.wifi;
 
 import static org.junit.Assert.*;
+import static org.mockito.Mockito.*;
 
 import android.content.pm.UserInfo;
 import android.net.IpConfiguration;
@@ -25,6 +26,7 @@ import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiEnterpriseConfig;
 import android.net.wifi.WifiNetworkSpecifier;
 import android.net.wifi.WifiScanner;
+import android.os.Binder;
 import android.os.PatternMatcher;
 import android.os.UserHandle;
 import android.util.Pair;
@@ -33,11 +35,14 @@ import androidx.test.filters.SmallTest;
 
 import org.junit.Test;
 
+import java.security.ProviderException;
 import java.security.cert.X509Certificate;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+
+import javax.crypto.Mac;
 
 /**
  * Unit tests for {@link com.android.server.wifi.WifiConfigurationUtil}.
@@ -959,6 +964,49 @@ public class WifiConfigurationUtilTest {
         newConfig.macRandomizationSetting = WifiConfiguration.RANDOMIZATION_NONE;
         assertFalse(WifiConfigurationUtil.hasMacRandomizationSettingsChanged(
                 existingConfig, newConfig));
+    }
+
+    /**
+     * Verifies that calculatePersistentMacForConfiguration produces persistent, locally generated
+     * MAC addresses that are valid for MAC randomization.
+     */
+    @Test
+    public void testCalculatePersistentMacForConfiguration() {
+        // verify null inputs
+        assertNull(WifiConfigurationUtil.calculatePersistentMacForConfiguration(null, null));
+
+        // test multiple times since there is some randomness involved with hashing
+        int uid = Binder.getCallingUid();
+        for (int i = 0; i < 10; i++) {
+            // Verify that a the MAC address calculated is valid
+            WifiConfiguration config = WifiConfigurationTestUtil.createOpenNetwork();
+            Mac hashFunction = WifiConfigurationUtil.obtainMacRandHashFunction(uid);
+            MacAddress macAddress = WifiConfigurationUtil.calculatePersistentMacForConfiguration(
+                    config, hashFunction);
+            assertTrue(WifiConfiguration.isValidMacAddressForRandomization(macAddress));
+
+            // Verify that the secret used to generate MAC address is persistent
+            Mac hashFunction2 = WifiConfigurationUtil.obtainMacRandHashFunction(uid);
+            MacAddress macAddress2 = WifiConfigurationUtil.calculatePersistentMacForConfiguration(
+                    config, hashFunction2);
+            assertEquals(macAddress, macAddress2);
+        }
+    }
+
+    /**
+     * Verify the java.security.ProviderException is caught.
+     */
+    @Test
+    public void testCalculatePersistentMacCatchesException() {
+        Mac hashFunction = mock(Mac.class);
+        when(hashFunction.doFinal(any())).thenThrow(new ProviderException("error occurred"));
+        try {
+            WifiConfiguration config = WifiConfigurationTestUtil.createOpenNetwork();
+            assertNull(WifiConfigurationUtil.calculatePersistentMacForConfiguration(config,
+                    hashFunction));
+        } catch (Exception e) {
+            fail("Exception not caught.");
+        }
     }
 
     private static class EnterpriseConfig {
